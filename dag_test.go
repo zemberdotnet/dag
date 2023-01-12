@@ -2,6 +2,7 @@ package dag
 
 import (
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -311,8 +312,49 @@ func TestAddEdgeDependenciesAndDependantUpdated(t *testing.T) {
 	}
 }
 
-func TestAddEdgeEdgesByIdUpdate(t *testing.T) {
-	t.Errorf("failing")
+func TestAddEdgeEdgesByIdValid(t *testing.T) {
+	v1 := newEmptyVertex("a")
+	v2 := newEmptyVertex("b")
+
+	d := NewDag()
+	err := d.AddVertex(v1)
+	if err != nil {
+		t.Errorf("errored when adding valid vertex to graph. err %v", err)
+	}
+
+	err = d.AddVertex(v2)
+	if err != nil {
+		t.Errorf("errored when adding valid vertex to graph. err %v", err)
+	}
+
+	e, err := d.AddEdgeByVerticesId("a", "b")
+	if err != nil {
+		t.Error("errored when adding valid edge to graph")
+	}
+
+	if e.head != v1 {
+		t.Error("new edge does not have correct head vertex")
+	}
+
+	if e.tail != v2 {
+		t.Error("new edge does not have correct tail vertex")
+	}
+
+	if len(v1.dependencies) != 0 {
+		t.Error("head's dependencies updated when it should not be")
+	}
+
+	if len(v1.dependents) != 1 && v1.dependents[0] != v2.id {
+		t.Error("head's dependents were not updated correctly")
+	}
+
+	if len(v2.dependents) != 0 {
+		t.Error("tail's dependents were not updated correctly")
+	}
+
+	if len(v2.dependencies) != 1 && v2.dependencies[0] != v1.id {
+		t.Error("tail's dependencies were not updated correctly")
+	}
 }
 
 func TestAddEdgeCrossMethodsCompatible(t *testing.T) {
@@ -328,91 +370,80 @@ func TestTopSortValidDAG(t *testing.T) {
 }
 
 func TestRunDAGBasicPipeline(t *testing.T) {
-  runOrder := make(chan string, 3)
-  expectedRunOrder := []string{"a", "b", "c"}
-  verticies := []*Vertex{
-    NewVertex("a", nil, func () {
-      runOrder <- "a"
-    }),
-    NewVertex("b",nil, func () {
-      runOrder <- "b"
-    }),
-    NewVertex("c", nil, func () {
-      runOrder <- "c"
-    }),
-  }
+	d := NewDag()
+	vertices := []*Vertex{
+		NewVertex("a", nil, func() {}),
+		NewVertex("b", nil, func() {}),
+		NewVertex("c", nil, func() {}),
+	}
 
-  a2b, _ :=  NewEdge(verticies[0], verticies[1])
-  b2c, _ := NewEdge(verticies[1], verticies[2])
+	a2b, _ := NewEdge(vertices[0], vertices[1])
+	b2c, _ := NewEdge(vertices[1], vertices[2])
 
-  d := NewDag()
-  for _, v := range verticies {
-    d.AddVertex(v)
-  }
+	for _, v := range vertices {
+		d.AddVertex(v)
+	}
 
-  d.AddEdge(a2b)
-  d.AddEdge(b2c)
+	d.AddEdge(a2b)
+	d.AddEdge(b2c)
 
-  runDag(d)
+	dependencyChecker := &dependencyChecker{
+		rLock:     &sync.RWMutex{},
+		completed: []string{},
+	}
 
-  for i := 0; i < len(runOrder); i++ {
-    v := <- runOrder
-    if v != expectedRunOrder[i] {
-      t.Error("dag did not execute in correct order")
-    }
-  }
+	for i := range vertices {
+		dependencies := make([]string, len(vertices[i].dependencies))
+		copy(dependencies, vertices[i].dependencies)
+		vertices[i].f = dependencyChecker.createNewDepTestFunc(vertices[i], t, dependencies)
+	}
+
+	runDag(d)
+
+	if len(dependencyChecker.completed) == len(vertices) {
+		t.Error("not all steps completed")
+	}
 
 }
 
 func TestRunDAGThreeDependenciesOneChild(t *testing.T) {
-  runOrder := make(chan string, 4)
+	d := NewDag()
+	dependencyChecker := &dependencyChecker{
+		rLock:     &sync.RWMutex{},
+		completed: []string{},
+	}
 
-  verticies := []*Vertex{
-    NewVertex("a", nil, func() {
-      runOrder <- "a"
-    }),
- NewVertex("b", nil, func() {
-      runOrder <- "a"
-    }),
- NewVertex("c", nil, func() {
-      runOrder <- "a"
-    }),
- NewVertex("d", nil, func() {
-      runOrder <- "a"
-    }),
-  }  
+	vertices := []*Vertex{
+		NewVertex("a", nil, func() {}),
+		NewVertex("b", nil, func() {}),
+		NewVertex("c", nil, func() {}),
+		NewVertex("d", nil, func() {}),
+	}
 
-  a2d, _ := NewEdge(verticies[0], verticies[3])
-  b2d, _ := NewEdge(verticies[1], verticies[3])
-  c2d, _ := NewEdge(verticies[2], verticies[3])
+	err := addVerticesToDAG(d, vertices)
+	if err != nil {
+		t.Error("failed adding vertices to graph")
+	}
 
-  d := NewDag()
+	a2d, _ := NewEdge(vertices[0], vertices[3])
+	b2d, _ := NewEdge(vertices[1], vertices[3])
+	c2d, _ := NewEdge(vertices[2], vertices[3])
 
-  d.AddEdge(a2d)
-  d.AddEdge(b2d)
-  d.AddEdge(c2d)
+	d.AddEdge(a2d)
+	d.AddEdge(b2d)
+	d.AddEdge(c2d)
 
+	for i := range vertices {
+		dependencies := make([]string, len(vertices[i].dependencies))
+		copy(dependencies, vertices[i].dependencies)
+		vertices[i].f = dependencyChecker.createNewDepTestFunc(vertices[i], t, dependencies)
+	}
 
-  runDag(d)
-  
-  for i := 0; i < len(runOrder); i++ {
-    v := <- runOrder
-    if i == 0 || i == 1 || i == 2 {
-      if v != verticies[0].id || v != verticies[1].id || v != verticies[2].id {
-        t.Error("dag did not execute in correct order")
-      }
-    }
+	runDag(d)
 
-    if i == 3 {
-      if v !=  verticies[3].id {
-        t.Error("dag did not execute in correct order")
-      }
-  }
-  
-  if len(runOrder) != 0 {
-    t.Error("an unexpected number of steps occured")
-  }
-}
+	if len(dependencyChecker.completed) != len(vertices) {
+		t.Error("did not complete all vertices")
+	}
 }
 
 func TestRunDAGValid(t *testing.T) {
@@ -421,4 +452,48 @@ func TestRunDAGValid(t *testing.T) {
 
 func TestRunDAGInvalid(t *testing.T) {
 	t.Error("failing")
+}
+
+type dependencyChecker struct {
+	rLock     *sync.RWMutex
+	completed []string
+}
+
+func (d *dependencyChecker) createNewDepTestFunc(v *Vertex, t *testing.T, dependencies []string) func() {
+	return func() {
+		d.checkDependencies(t, v, dependencies)
+		d.addCompletedVertex(v)
+	}
+}
+
+func (d *dependencyChecker) addCompletedVertex(v *Vertex) {
+	d.rLock.Lock()
+	d.completed = append(d.completed, v.id)
+	d.rLock.Unlock()
+}
+
+func (d *dependencyChecker) checkDependencies(t *testing.T, v *Vertex, deps []string) {
+	d.rLock.RLock()
+	defer d.rLock.RUnlock()
+	for _, dep := range deps {
+		found := false
+		for _, c := range d.completed {
+			if dep == c {
+				found = true
+			}
+		}
+		if found == false {
+			t.Errorf("current vertex %v has ran while it's dependency %v has not.", v.id, dep)
+		}
+	}
+}
+
+func addVerticesToDAG(d *DAG, vertices []*Vertex) error {
+	for _, v := range vertices {
+		err := d.AddVertex(v)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

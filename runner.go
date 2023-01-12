@@ -1,13 +1,14 @@
 package dag
 
-import ("sync")
+import (
+	"sync"
+)
 
 func runDag(dag *DAG) {
 	finished := make(chan string, len(dag.vertices))
 	indegree := make(map[*Vertex]int)
 	processed := 0
-  processedLock := &sync.RWMutex{} 
-
+	processedLock := &sync.RWMutex{}
 
 	// Count incoming edges
 	for _, vertex := range dag.vertices {
@@ -31,12 +32,12 @@ func runDag(dag *DAG) {
 		go func() {
 			vertex.f()
 			finished <- vertex.id
-      processedLock.Lock()
+			processedLock.Lock()
 			processed++
-      processedLock.Unlock()
+			processedLock.Unlock()
 		}()
 
-		if len(queue) == 0 {
+		for len(queue) == 0 {
 			select {
 			case finishedTask := <-finished:
 				finishedVertex := dag.vertexById[finishedTask]
@@ -46,14 +47,13 @@ func runDag(dag *DAG) {
 						queue = append(queue, dag.vertexById[dependent])
 					}
 				}
-
 			default:
-        processedLock.RLock()
+				processedLock.RLock()
 				if len(queue) == 0 && processed == len(dag.vertices) {
-          processedLock.RUnlock()
+					processedLock.RUnlock()
 					return
 				}
-        processedLock.RUnlock()
+				processedLock.RUnlock()
 			}
 		}
 	}
